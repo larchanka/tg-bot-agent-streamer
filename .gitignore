@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .sessions/
+.context_cache
 workspace/
 .env
 *.log

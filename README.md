@@ -39,22 +39,30 @@ cd tg-bot-agent-streamer
 pnpm install
 ```
 
-### 3. Configuration
+### 3. Configuration & Telegram Setup
 
-Copy the example environment configuration:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your values:
-
-```env
-TELEGRAM_BOT_TOKEN="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
-ALLOWED_TELEGRAM_USER_IDS="12345678,87654321"
-PI_WORKSPACE_DIR="/path/to/your/project"
-PI_MODEL="anthropic/claude-3-7-sonnet"
-```
+1. Copy the example environment configuration:
+   ```bash
+   cp .env.example .env
+   ```
+2. Open Telegram and message [@BotFather](https://t.me/BotFather) to create a bot (`/newbot`) and configure bot commands (`/setcommands`):
+   ```
+   start - Start the bot and see instructions
+   help - Detailed command help
+   stop - Abort current agent execution
+   status - Check agent process health and model
+   new - Start a clean session context
+   ```
+3. Whitelist your Telegram User ID by querying [@userinfobot](https://t.me/userinfobot) or [@raw_data_bot](https://t.me/raw_data_bot).
+4. Edit `.env` with your values:
+   ```env
+   TELEGRAM_BOT_TOKEN="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+   ALLOWED_TELEGRAM_USER_IDS="12345678,87654321"
+   PI_WORKSPACE_DIR="/path/to/your/project"
+   PI_MODEL="anthropic/claude-3-7-sonnet"
+   PI_SESSION_DIR=".sessions"
+   STREAM_THROTTLE_MS="1000"
+   ```
 
 ### 4. Running the Bot
 
@@ -69,7 +77,22 @@ pnpm build
 pnpm start
 ```
 
-### 5. Testing & Verification
+### 5. Production Deployment
+
+#### Process Management with PM2
+For background daemon execution with automatic restarts:
+```bash
+pnpm add -g pm2
+pnpm build
+pm2 start dist/index.js --name "tg-pi-streamer"
+pm2 save
+pm2 startup
+```
+
+#### Docker Deployment
+When containerizing, mount the host project directory into `PI_WORKSPACE_DIR` and ensure the container user has read/write file permissions and access to necessary development tools (Node, git, etc.).
+
+### 6. Testing & Verification
 
 Run the full test suite (unit and end-to-end integration tests):
 ```bash
@@ -100,12 +123,16 @@ pnpm typecheck
 
 ---
 
-## Documentation
+## Technical Documentation & Architecture
 
-- [Architecture & System Design](docs/architecture.md)
-- [Pi RPC Protocol Integration](docs/pi-rpc-integration.md)
-- [Telegram Streaming & Markdown Handling](docs/telegram-streaming.md)
-- [Configuration & Deployment Guide](docs/configuration.md)
+The repository's complete technical context and architecture documentation is maintained in [`context/`](context/):
+
+- [**Codebase Context & Navigation Map**](context/index.md): Central index and quick facts.
+- [**System Architecture & Subsystems**](context/architecture.md): High-level system architecture, Mermaid diagrams, and request lifecycle.
+- [**Module Catalog**](context/modules.md): Complete module-by-module public API and component breakdown.
+- [**Signatures & Symbol Index**](context/signatures.md): Searchable index of all function signatures, parameters, and return types.
+- [**Dependencies & Integrations**](context/dependencies.md): Internal call graphs, hub modules, and third-party dependencies.
+- [**Engineering Conventions & Invariants**](context/conventions.md): Code style, error handling patterns, and non-negotiable invariants.
 
 ---
 

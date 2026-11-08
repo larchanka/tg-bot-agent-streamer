@@ -325,4 +325,4 @@ Project Scaffold (package.json, tsconfig.json, config.ts)
 ---
 
 ## Open Questions
-- None. Requirements, architecture, framing rules, and bot commands are fully specified in `docs/` and `AGENTS.md`.
+- None. Requirements, architecture, framing rules, and bot commands are fully specified in `context/` and `AGENTS.md`.

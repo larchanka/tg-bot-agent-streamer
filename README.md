@@ -69,6 +69,23 @@ pnpm build
 pnpm start
 ```
 
+### 5. Testing & Verification
+
+Run the full test suite (unit and end-to-end integration tests):
+```bash
+pnpm test
+```
+
+Watch mode for development:
+```bash
+pnpm test:watch
+```
+
+Typecheck without emitting code:
+```bash
+pnpm typecheck
+```
+
 ---
 
 ## Bot Commands

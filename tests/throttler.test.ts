@@ -16,6 +16,19 @@ function createMockApi() {
   };
 }
 
+function createRichMockApi() {
+  let nextMessageId = 200;
+  return {
+    ...createMockApi(),
+    sendRichMessage: vi.fn().mockImplementation(async (chatId: number | string, richMessage: unknown, other?: unknown) => {
+      return { message_id: ++nextMessageId, rich_message: richMessage, other };
+    }),
+    sendRichMessageDraft: vi.fn().mockImplementation(async (chatId: number | string, draftId: number, richMessage: unknown, other?: unknown) => {
+      return { draft_id: draftId, rich_message: richMessage, other };
+    }),
+  };
+}
+
 describe("StreamThrottler", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -497,6 +510,309 @@ describe("StreamThrottler", () => {
       expect(mockApi.editMessageText).toHaveBeenCalledTimes(0);
       // Typing action should have stopped after the initial one
       expect(mockApi.sendChatAction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Slice 8: Rich Message Draft Streaming", () => {
+    it("calls sendRichMessageDraft with unique draftId and parsed InputRichMessage on throttle tick", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("# Heading 1\n\nSome introductory text.");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      const [chatId, draftId, richMessage] = mockApi.sendRichMessageDraft.mock.calls[0];
+      expect(chatId).toBe(12345);
+      expect(typeof draftId).toBe("number");
+      expect(draftId).toBeGreaterThan(0);
+      expect(throttler.draftId).toBe(draftId);
+
+      expect(richMessage).toHaveProperty("blocks");
+      expect(richMessage.blocks.length).toBe(2);
+      expect(richMessage.blocks[0]).toMatchObject({
+        type: "heading",
+        size: 1,
+        text: "Heading 1",
+      });
+      expect(richMessage.blocks[1]).toMatchObject({
+        type: "paragraph",
+        text: "Some introductory text.",
+      });
+
+      // Classic methods should not be called
+      expect(mockApi.sendMessage).not.toHaveBeenCalled();
+      expect(mockApi.editMessageText).not.toHaveBeenCalled();
+    });
+
+    it("reuses the same draftId across consecutive throttle ticks", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("Token 1");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      const firstDraftId = mockApi.sendRichMessageDraft.mock.calls[0][1];
+
+      throttler.feed(" Token 2");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(2);
+      const secondDraftId = mockApi.sendRichMessageDraft.mock.calls[1][1];
+
+      expect(firstDraftId).toBe(secondDraftId);
+      expect(throttler.draftId).toBe(firstDraftId);
+    });
+
+    it("respects custom initial draftId if provided in options", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, {
+        throttleMs: 1000,
+        draftId: 777888,
+      });
+
+      throttler.feed("Custom draft ID test");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      expect(mockApi.sendRichMessageDraft.mock.calls[0][1]).toBe(777888);
+      expect(throttler.draftId).toBe(777888);
+    });
+  });
+
+  describe("Slice 9: Thinking Block Injection in Rich Drafts", () => {
+    it("injects InputRichBlockThinking block when currentToolStatus is active", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("Searching repository files...");
+      throttler.setToolStatus("ripgrep");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      const richMessage = mockApi.sendRichMessageDraft.mock.calls[0][2];
+      expect(richMessage.blocks.length).toBe(2);
+      expect(richMessage.blocks[0]).toMatchObject({
+        type: "paragraph",
+        text: "Searching repository files...",
+      });
+      expect(richMessage.blocks[1]).toEqual({
+        type: "thinking",
+        text: "⚙️ Running: ripgrep...",
+      });
+    });
+
+    it("removes thinking block once tool status is cleared", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("Thinking about task");
+      throttler.setToolStatus("bash");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      expect(mockApi.sendRichMessageDraft.mock.calls[0][2].blocks).toHaveLength(2);
+
+      throttler.setToolStatus(null);
+      throttler.feed("\n\nTask executed successfully.");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(2);
+      const secondBlocks = mockApi.sendRichMessageDraft.mock.calls[1][2].blocks;
+      const thinkingBlocks = secondBlocks.filter((b: { type: string }) => b.type === "thinking");
+      expect(thinkingBlocks).toHaveLength(0);
+    });
+
+    it("sends draft with only thinking block when buffer is empty but tool status is active", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.setToolStatus("agent_eval");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      const richMessage = mockApi.sendRichMessageDraft.mock.calls[0][2];
+      expect(richMessage.blocks).toEqual([
+        {
+          type: "thinking",
+          text: "⚙️ Running: agent_eval...",
+        },
+      ]);
+    });
+  });
+
+  describe("Slice 10: Rich Message Finalization", () => {
+    it("calls sendRichMessage with converted InputRichMessage and marks throttler finalized", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("```ts\nconst x = 42;\n```");
+      await throttler.finalize();
+
+      expect(mockApi.sendRichMessage).toHaveBeenCalledTimes(1);
+      const [chatId, richMessage] = mockApi.sendRichMessage.mock.calls[0];
+      expect(chatId).toBe(12345);
+      expect(richMessage.blocks).toEqual([
+        {
+          type: "pre",
+          language: "ts",
+          text: "const x = 42;",
+        },
+      ]);
+      expect(throttler.isFinalized).toBe(true);
+
+      // Verify timers cleared - advancing time produces no calls
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockApi.sendRichMessageDraft).not.toHaveBeenCalled();
+      expect(mockApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not include thinking block in final sendRichMessage", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("Operation complete.");
+      throttler.setToolStatus("bash");
+
+      await throttler.finalize();
+
+      expect(mockApi.sendRichMessage).toHaveBeenCalledTimes(1);
+      const richMessage = mockApi.sendRichMessage.mock.calls[0][1];
+      const hasThinking = richMessage.blocks.some((b: { type: string }) => b.type === "thinking");
+      expect(hasThinking).toBe(false);
+      expect(richMessage.blocks[0]).toMatchObject({
+        type: "paragraph",
+        text: "Operation complete.",
+      });
+    });
+
+    it("does not call sendRichMessage when finalizing with an empty buffer", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      await throttler.finalize();
+
+      expect(mockApi.sendRichMessage).not.toHaveBeenCalled();
+      expect(throttler.isFinalized).toBe(true);
+    });
+  });
+
+  describe("Slice 11: Two-Tier Resilient Fallback", () => {
+    it("falls back to classic sendMessage / editMessageText when sendRichMessageDraft fails", async () => {
+      const mockApi = createRichMockApi();
+      mockApi.sendRichMessageDraft.mockRejectedValueOnce(new Error("Chat does not support rich drafts"));
+
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("Hello fallback!");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // sendRichMessageDraft was attempted and failed
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      // Immediately fell back to classic sendMessage in the same tick
+      expect(mockApi.sendMessage).toHaveBeenCalledTimes(1);
+      expect(mockApi.sendMessage).toHaveBeenCalledWith(
+        12345,
+        expect.stringContaining("Hello fallback"),
+        { parse_mode: "MarkdownV2" }
+      );
+
+      // Next tick uses classic editMessageText, not rich drafts
+      throttler.feed(" Continued.");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1); // not called again
+      expect(mockApi.editMessageText).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to classic sendMessage when sendRichMessage fails during finalize", async () => {
+      const mockApi = createRichMockApi();
+      mockApi.sendRichMessage.mockRejectedValueOnce(new Error("API Error: Rich message rejected"));
+
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("Final text fallback");
+      await throttler.finalize();
+
+      expect(mockApi.sendRichMessage).toHaveBeenCalledTimes(1);
+      expect(mockApi.sendMessage).toHaveBeenCalledTimes(1);
+      expect(mockApi.sendMessage).toHaveBeenCalledWith(
+        12345,
+        expect.stringContaining("Final text fallback"),
+        { parse_mode: "MarkdownV2" }
+      );
+      expect(throttler.isFinalized).toBe(true);
+    });
+
+    it("executes secondary tier fallback to plain text if classic MarkdownV2 fails with entity error", async () => {
+      const mockApi = createRichMockApi();
+      mockApi.sendRichMessageDraft.mockRejectedValueOnce(new Error("Rich draft unsupported"));
+      // Classic sendMessage rejects first with MarkdownV2 parse error
+      mockApi.sendMessage
+        .mockRejectedValueOnce(new Error("Bad Request: can't parse entities in message"))
+        .mockResolvedValueOnce({ message_id: 301, text: "plain", options: undefined });
+
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("*broken markdown");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      // sendMessage was called twice: 1st with MarkdownV2, 2nd as plain unformatted text
+      expect(mockApi.sendMessage).toHaveBeenCalledTimes(2);
+      expect(mockApi.sendMessage.mock.calls[0][2]).toEqual({ parse_mode: "MarkdownV2" });
+      expect(mockApi.sendMessage.mock.calls[1][2]).toBeUndefined();
+    });
+
+    it("respects useRichMessages: false or enableRichMessages: false to disable rich mode", async () => {
+      const mockApi = createRichMockApi();
+      const throttler = new StreamThrottler(mockApi, 12345, {
+        throttleMs: 1000,
+        useRichMessages: false,
+      });
+
+      throttler.feed("Classic mode forced");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendRichMessageDraft).not.toHaveBeenCalled();
+      expect(mockApi.sendMessage).toHaveBeenCalledTimes(1);
+
+      await throttler.finalize();
+      expect(mockApi.sendRichMessage).not.toHaveBeenCalled();
+    });
+
+    it("defaults to classic mode if rich methods are not available on TelegramApiLike", async () => {
+      const mockApi = createMockApi(); // No sendRichMessage or sendRichMessageDraft
+      const throttler = new StreamThrottler(mockApi, 12345, { throttleMs: 1000 });
+
+      throttler.feed("Classic default without rich methods");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockApi.sendMessage).toHaveBeenCalledTimes(1);
+      await throttler.finalize();
+      expect(throttler.isFinalized).toBe(true);
+    });
+
+    it("disables rich mode if either sendRichMessageDraft or sendRichMessage is missing", async () => {
+      const mockApiDraftOnly = {
+        ...createMockApi(),
+        sendRichMessageDraft: vi.fn(),
+      };
+      const throttler1 = new StreamThrottler(mockApiDraftOnly, 12345, { throttleMs: 1000 });
+      throttler1.feed("Hello");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockApiDraftOnly.sendRichMessageDraft).not.toHaveBeenCalled();
+      expect(mockApiDraftOnly.sendMessage).toHaveBeenCalledTimes(1);
+
+      const mockApiFinalOnly = {
+        ...createMockApi(),
+        sendRichMessage: vi.fn(),
+      };
+      const throttler2 = new StreamThrottler(mockApiFinalOnly, 12345, { throttleMs: 1000 });
+      throttler2.feed("Hello");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockApiFinalOnly.sendMessage).toHaveBeenCalledTimes(1);
+      await throttler2.finalize();
+      expect(mockApiFinalOnly.sendRichMessage).not.toHaveBeenCalled();
+      expect(mockApiFinalOnly.editMessageText).toHaveBeenCalledTimes(1);
     });
   });
 });

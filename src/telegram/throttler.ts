@@ -1,4 +1,6 @@
 import { formatTelegramMarkdown, stripMarkdown } from "./markdown.js";
+import { parseMarkdownToRichMessage } from "./rich-parser.js";
+import type { InputRichBlockThinking, InputRichMessage } from "./rich-types.js";
 
 export interface TelegramApiLike {
   sendMessage(
@@ -16,6 +18,17 @@ export interface TelegramApiLike {
     chatId: number | string,
     action: string
   ): Promise<unknown>;
+  sendRichMessage?(
+    chat_id: number | string,
+    rich_message: InputRichMessage,
+    other?: unknown
+  ): Promise<unknown>;
+  sendRichMessageDraft?(
+    chat_id: number | string,
+    draft_id: number,
+    rich_message: InputRichMessage,
+    other?: unknown
+  ): Promise<unknown>;
 }
 
 export interface StreamThrottlerOptions {
@@ -23,6 +36,9 @@ export interface StreamThrottlerOptions {
   maxMessageLength?: number;
   typingIntervalMs?: number;
   initialMessageId?: number;
+  useRichMessages?: boolean;
+  enableRichMessages?: boolean;
+  draftId?: number;
 }
 
 export class StreamThrottler {
@@ -31,6 +47,9 @@ export class StreamThrottler {
   private readonly throttleMs: number;
   private readonly maxMessageLength: number;
   private readonly typingIntervalMs: number;
+
+  private useRichMessages: boolean;
+  private _draftId?: number;
 
   private buffer = "";
   private dirty = false;
@@ -56,6 +75,15 @@ export class StreamThrottler {
     this.typingIntervalMs = options.typingIntervalMs ?? 4000;
     this.currentMessageId = options.initialMessageId;
 
+    const requested = options.useRichMessages ?? options.enableRichMessages;
+    const hasRichMethods =
+      typeof api.sendRichMessageDraft === "function" &&
+      typeof api.sendRichMessage === "function";
+
+    this.useRichMessages =
+      requested !== undefined ? requested && hasRichMethods : hasRichMethods;
+    this._draftId = options.draftId;
+
     this.startTimers();
   }
 
@@ -65,6 +93,10 @@ export class StreamThrottler {
 
   public get messageId(): number | undefined {
     return this.currentMessageId;
+  }
+
+  public get draftId(): number | undefined {
+    return this._draftId;
   }
 
   public get isFinalized(): boolean {
@@ -136,6 +168,10 @@ export class StreamThrottler {
       return;
     }
 
+    if (await this.trySendRichDraft()) {
+      return;
+    }
+
     await this.splitAndFinalizeExceededChunks();
 
     const intermediateText = this.buildIntermediateContent();
@@ -148,6 +184,51 @@ export class StreamThrottler {
       }
     } else {
       await this.editMessageTextWithFallback(this.currentMessageId, intermediateText, true);
+    }
+  }
+
+  private async trySendRichDraft(): Promise<boolean> {
+    if (!this.useRichMessages || typeof this.api.sendRichMessageDraft !== "function") {
+      return false;
+    }
+
+    try {
+      if (this._draftId === undefined) {
+        this._draftId = Math.floor(Math.random() * 2147483647) + 1;
+      }
+
+      const richMessage = parseMarkdownToRichMessage(this.buffer);
+      if (this.currentToolStatus) {
+        const thinkingBlock: InputRichBlockThinking = {
+          type: "thinking",
+          text: `⚙️ Running: ${this.currentToolStatus}...`,
+        };
+        richMessage.blocks.push(thinkingBlock);
+      }
+
+      await this.api.sendRichMessageDraft(this.chatId, this._draftId, richMessage);
+      return true;
+    } catch {
+      this.useRichMessages = false;
+      return false;
+    }
+  }
+
+  private async trySendRichFinal(): Promise<boolean> {
+    if (!this.useRichMessages || typeof this.api.sendRichMessage !== "function") {
+      return false;
+    }
+
+    try {
+      const richMessage = parseMarkdownToRichMessage(this.buffer);
+      const res = await this.api.sendRichMessage(this.chatId, richMessage);
+      if (res && typeof res === "object" && "message_id" in res) {
+        this.currentMessageId = (res as { message_id: number }).message_id;
+      }
+      return true;
+    } catch {
+      this.useRichMessages = false;
+      return false;
     }
   }
 
@@ -258,6 +339,13 @@ export class StreamThrottler {
         await this.inFlightFlush;
       } catch {
         // Ignored
+      }
+    }
+
+    if (this.buffer.trim().length > 0) {
+      if (await this.trySendRichFinal()) {
+        this._isFinalized = true;
+        return;
       }
     }
 

@@ -134,10 +134,48 @@ This document details all modules, exported public APIs, classes, functions, and
 - **Dependencies**: `grammy`.
 - **Test Suite**: [`tests/media.test.ts`](../tests/media.test.ts) (tests photo downloading, base64 encoding, and error handling for missing files).
 
+### `src/telegram/rich-types.ts`
+- **Location**: [`src/telegram/rich-types.ts`](../src/telegram/rich-types.ts)
+- **Role**: Telegram Bot API 10.1+ Rich Message type declarations and re-exports.
+- **Key Types**:
+  - `InputRichMessage`, `InputRichBlock`, `InputRichBlockTable`, `RichBlockTableCell`, `InputRichBlockParagraph`, `InputRichBlockSectionHeading`, `InputRichBlockPreformatted`, `InputRichBlockList`, `InputRichBlockListItem`, `InputRichBlockBlockQuotation`, `InputRichBlockExpandableBlockQuotation`, `InputRichBlockDetails`, `InputRichBlockDivider`, `InputRichBlockThinking`.
+  - `RichText`, `RichTextEntity`, `RichTextBold`, `RichTextItalic`, `RichTextUnderline`, `RichTextStrikethrough`, `RichTextSpoiler`, `RichTextCode`, `RichTextUrl`, `RichTextMathematicalExpression`, `RichTextCustomEmoji`.
+- **Dependencies**: `grammy/types`.
+
+### `src/telegram/rich-text.ts`
+- **Location**: [`src/telegram/rich-text.ts`](../src/telegram/rich-text.ts)
+- **Role**: Markdown inline token parser converting inline syntax (bold, italic, code, underline, strikethrough, spoiler, links, LaTeX math) into structured Telegram `RichText` representations.
+- **Key Functions**:
+  - `parseInlineRichText(text: string): RichText`: Recursively parses Markdown inline formatting into structured `RichText` AST entities.
+  - `parseRichText(text: string): RichText`: Alias of `parseInlineRichText`.
+- **Dependencies**: `src/telegram/rich-types.ts`.
+- **Test Suite**: [`tests/rich-text.test.ts`](../tests/rich-text.test.ts) (tests plain text, single tokens, mixed tokens, nested formatting, escaped chars, and unclosed streaming tokens).
+
+### `src/telegram/rich-table.ts`
+- **Location**: [`src/telegram/rich-table.ts`](../src/telegram/rich-table.ts)
+- **Role**: GitHub Flavored Markdown (GFM) table parser and converter for Telegram Bot API 10.1+ native `InputRichBlockTable`.
+- **Key Types & Functions**:
+  - `TableOptions`: Options interface for `is_bordered`, `is_striped`, `is_compact`, `caption`, and `valign`.
+  - `isMarkdownTable(text: string): boolean`: Validates whether the given text is a valid GFM table.
+  - `parseMarkdownTable(tableMarkdown: string, options?: TableOptions): InputRichBlockTable | null`: Parses GFM table markdown into an `InputRichBlockTable` containing header and data rows with alignments and inline rich text.
+  - `splitRowIntoCells(line: string): string[]`: Splits a row by unescaped pipes handling escaped pipes `\|` and stripping outer boundary pipes.
+  - `parseDelimiterRow(line: string): CellAlignment[] | null`: Extracts column alignments (`left`, `center`, `right`) from delimiter rows.
+- **Dependencies**: `src/telegram/rich-text.ts`, `src/telegram/rich-types.ts`.
+- **Test Suite**: [`tests/rich-table.test.ts`](../tests/rich-table.test.ts) (tests basic tables, column alignments, inline formatting in cells, styling options, escaped pipes, ragged rows, and malformed inputs).
+
+### `src/telegram/rich-parser.ts`
+- **Location**: [`src/telegram/rich-parser.ts`](../src/telegram/rich-parser.ts)
+- **Role**: Full Markdown to Telegram Bot API 10.1+ `InputRichMessage` block parser and orchestrator.
+- **Key Types & Functions**:
+  - `RichParserOptions`: Options interface supporting `tableOptions?: TableOptions`.
+  - `parseMarkdownToRichMessage(markdown: string, options?: RichParserOptions): InputRichMessage & { blocks: InputRichBlock[] }`: Converts complete Markdown documents into structured `InputRichBlock[]` blocks (paragraphs, headings 1-6, fenced code blocks, GFM tables, blockquotes, expandable `<details>`, bullet/ordered/task lists, dividers `---`, and `<thinking>` blocks) with streaming resilience.
+- **Dependencies**: `src/telegram/rich-text.ts`, `src/telegram/rich-table.ts`, `src/telegram/rich-types.ts`.
+- **Test Suite**: [`tests/rich-parser.test.ts`](../tests/rich-parser.test.ts) (tests all block types, formatting combinations, unclosed code/thinking/details blocks, and complex mixed documents).
+
 ---
 
 ## 6. End-to-End & Integration Test Suite
 
 ### `tests/integration.test.ts`
 - **Location**: [`tests/integration.test.ts`](../tests/integration.test.ts)
-- **Role**: Full end-to-end integration test exercising the complete flow: Telegram mock message -> `bot.ts` -> `PiClient` -> mock Pi subprocess -> event streaming -> `Throttler` -> Telegram edit verification.
+- **Role**: Full end-to-end integration test exercising the complete flow: Telegram mock message -> `bot.ts` -> `PiClient` -> mock Pi subprocess -> event streaming -> `Throttler` -> Telegram edit verification. Validates streaming token deltas, tool status badges, steering in-flight requests, `/stop` aborts, multimodal photo processing, unauthorized user restriction, and native rich message streaming (`sendRichMessageDraft`, `InputRichBlockThinking`, and finalized `InputRichBlockTable`).

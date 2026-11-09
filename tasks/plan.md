@@ -1,195 +1,161 @@
-# Implementation Plan: Telegram Bot Pi Agent Streamer
+# Implementation Plan: Telegram Rich Messages Native Support (Bot API 10.1+)
 
 ## Overview
 
-Build a production-grade Telegram bot bridge connecting authorized Telegram users to the `pi` AI coding assistant running in bidirectional RPC mode (`pi --mode rpc`). The service features real-time streaming with 1-second rate-limiting, strict LF-based JSONL framing immune to Unicode line corruption, in-flight prompt steering and aborts, live tool execution indicators, resilient MarkdownV2 formatting with dynamic tag balancing and unformatted fallback, multimodal photo support, and security whitelisting.
+Implement native Telegram Rich Messages (introduced in Telegram Bot API 10.1+) in `tg-bot-agent-streamer`. This enhances the bot from sending flat MarkdownV2 strings to constructing and streaming native `InputRichMessage` objects with structured block elements. Key capabilities include parsing standard GitHub Flavored Markdown (GFM) tables into native `InputRichBlockTable` blocks (with header flags, alignments, border and compact styles), native headings, preformatted code blocks, lists (ordered, unordered, and checkboxes), blockquotes, expandable blockquotes / `<details>`, and AI thinking indicators (`InputRichBlockThinking`) during real-time streaming via `sendRichMessageDraft`. A robust, automatic fallback ensures seamless degradation to classic MarkdownV2 / plain text if Telegram clients or chats do not support Rich Messages.
 
 ---
 
 ## Architecture Decisions
 
-1. **Strict LF Framing over Node.js Readline**:
-   - *Rationale*: Node.js `readline` splits on `U+2028` and `U+2029` (ECMA-262 line terminators), which are valid inside JSON string literals and silently corrupt streamed JSON payloads. We implement a custom byte/string buffer in `src/pi/framing.ts` that splits exclusively on `\n` (stripping trailing `\r`).
-2. **Decoupled Throttler with Dynamic Tag Balancing**:
-   - *Rationale*: Telegram enforces a ~1 edit/sec flood limit and rejects unclosed formatting delimiters in MarkdownV2. The throttler buffers LLM tokens, flushes edits on a 1000ms timer, balances unclosed syntax tags (` ``` `, `*`, `_`, `||`, `~`, `` ` ``), and automatically falls back to plain unformatted text if Telegram entity parsing fails.
-3. **Session & In-Flight Concurrency Management**:
-   - *Rationale*: When Pi is actively streaming and a user submits a follow-up prompt, sending a raw prompt would disrupt the execution queue. The Pi client detects `isStreaming` state and sets `"streamingBehavior": "steer"` to seamlessly guide the agent after its current tool call. Aborts (`/stop`) immediately emit `{"type": "abort"}`.
-4. **Modularity & Testability**:
-   - *Rationale*: Each subsystem (framing, Pi client, throttler, markdown balancing, media downloader, bot routing) has clean boundaries and dedicated unit tests using `vitest`, allowing independent verification before end-to-end integration.
+1. **Dedicated Modular Parsing Pipeline (`rich-text` -> `rich-table` -> `rich-parser`)**:
+   - *Rationale*: Decoupling inline text parsing (`RichText`) from table parsing (`InputRichBlockTable`) and the top-level block orchestrator (`InputRichMessage`) ensures clear separation of concerns, testability in isolation, and zero regression on existing flat markdown utilities (`src/telegram/markdown.ts`).
+2. **Native Table AST Generation with Format Alignment**:
+   - *Rationale*: Markdown tables are converted into Telegram Bot API 10.1+ `InputRichBlockTable` structures containing a 2D matrix of `RichBlockTableCell[][]`. Alignment indicators (`:---`, `:---:`, `---:`) map directly to `align: "left" | "center" | "right"`, first rows are marked with `is_header: true`, and tables default to clean native styling (`is_bordered: true`, `is_striped: true`, `is_compact: true`).
+3. **Draft Streaming with AI Thinking Indicators (`sendRichMessageDraft`)**:
+   - *Rationale*: Telegram Bot API 10.1+ provides `sendRichMessageDraft` for streaming ephemeral drafts (previewed in private chats). Active tool calls (e.g. running bash commands or file lookups) are represented natively as `InputRichBlockThinking` blocks at the top or bottom of the message draft, providing visual status indicators.
+4. **Resilient Two-Tier Fallback Mechanism**:
+   - *Rationale*: If `sendRichMessageDraft` or `sendRichMessage` fails (e.g. group chat, older Telegram client, or API rejecting rich payload), the throttler transparently catches the error and degrades to standard `sendMessage` / `editMessageText` with balanced MarkdownV2 or stripped plain text.
+5. **Preserving NodeNext ESM and Strict Types**:
+   - *Rationale*: All new modules use TypeScript strict typings matching `@grammyjs/types` Rich Message definitions (`InputRichMessage`, `InputRichBlock`, `RichText`), with strict `.js` import specifiers adhering to NodeNext conventions.
 
 ---
 
 ## Dependency Graph
 
 ```
-Project Scaffold (package.json, tsconfig.json, config.ts)
-    │
-    ├── src/pi/framing.ts (LF Framer)
-    │       │
-    │       └── src/pi/client.ts (Pi Subprocess Manager & RPC Lifecycle)
-    │
-    ├── src/telegram/markdown.ts (Tag Balancer & MarkdownV2 Sanitizer)
-    │       │
-    │       └── src/telegram/throttler.ts (Edit Throttler & Chunk Splitter)
-    │
-    ├── src/telegram/media.ts (Telegram Photo to Base64 ImageContent)
-    │
-    └── src/bot.ts (grammY Bot, Whitelist Guard, Commands, Routing)
-            │
-            └── src/index.ts (Application Bootstrap & Lifecycle Management)
+src/telegram/rich-types.ts (Rich Message & Block Type Definitions)
+       │
+       ├── src/telegram/rich-text.ts (Inline Markdown -> RichText AST Parser)
+       │         │
+       │         ├── src/telegram/rich-table.ts (GFM Table -> InputRichBlockTable Converter)
+       │         │         │
+       │         └─────────┴── src/telegram/rich-parser.ts (Markdown -> InputRichMessage Orchestrator)
+       │                                 │
+       └─────────────────────────────────┼──────────────────────────────┐
+                                         │                              │
+                            src/telegram/throttler.ts                   │
+                       (sendRichMessageDraft & fallback)                │
+                                         │                              │
+                                    src/bot.ts ◄────────────────────────┘
+                            (Session wiring & AI Thinking)
 ```
 
 ---
 
 ## Task List
 
-### Phase 1: Project Setup & Core Protocol Framing
+### Phase 1: Rich Text & Markdown Table Foundations
 
-#### Task 1: Project Scaffolding & Configuration Module
-**Description:** Initialize TypeScript project configuration, package dependencies (`grammy`, `@grammyjs/auto-retry`, `telegramify-markdown`, `dotenv`, `zod`, `vitest`, `tsx`, `typescript`), `package.json` scripts (`dev`, `build`, `start`, `typecheck`, `test`), and implement strongly typed environment configuration in `src/config.ts`.
+#### Task 1: Rich Message Types & Inline RichText Parser
+**Description:** Define Telegram Bot API 10.1+ Rich Message interfaces in `src/telegram/rich-types.ts` (re-exporting / supplementing `@grammyjs/types`) and implement `src/telegram/rich-text.ts` to parse inline Markdown (bold, italic, code, strikethrough, spoiler, underline, links, math expressions) into structured `RichText` objects.
 
 **Acceptance criteria:**
-- [ ] `package.json` contains all required runtime and development dependencies and scripts.
-- [ ] `tsconfig.json` configured for Node.js 20+ ESM (`NodeNext` module resolution).
-- [ ] `src/config.ts` parses and validates environment variables (`TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_IDS`, `PI_WORKSPACE_DIR`, `PI_MODEL`, `PI_SESSION_DIR`, `STREAM_THROTTLE_MS`) with Zod, throwing descriptive errors on invalid configurations.
-- [ ] `vitest.config.ts` configured for ESM TypeScript test execution.
+- [ ] `src/telegram/rich-types.ts` exports complete interfaces for `RichText`, `RichTextBold`, `RichTextItalic`, `RichTextCode`, `RichTextSpoiler`, `RichTextStrikethrough`, `RichTextUnderline`, `RichTextUrl`, `RichTextMathematicalExpression`, `RichBlockTableCell`, `InputRichBlockTable`, and all `InputRichBlock` variants.
+- [ ] `parseRichText(text: string): RichText` correctly parses plain strings, single inline styles, and nested styles (e.g. `**bold _italic_**`).
+- [ ] Properly handles unclosed inline tags in streaming chunks without throwing syntax errors.
+- [ ] Unit tests in `tests/rich-text.test.ts` cover all inline formatting styles, edge cases, nested formats, and empty strings.
 
 **Verification:**
-- [ ] Build succeeds: `pnpm typecheck`
-- [ ] Tests pass: `pnpm test`
-- [ ] Config test verifies valid and invalid `.env` scenarios.
+- [ ] Tests pass: `pnpm vitest run tests/rich-text.test.ts`
+- [ ] Type check succeeds: `pnpm typecheck`
 
 **Dependencies:** None
 **Files likely touched:**
-- `package.json`
-- `tsconfig.json`
-- `vitest.config.ts`
-- `src/config.ts`
-- `tests/config.test.ts`
-**Estimated scope:** Medium (5 files)
+- `src/telegram/rich-types.ts`
+- `src/telegram/rich-text.ts`
+- `tests/rich-text.test.ts`
+**Estimated scope:** Medium (3 files)
 
 ---
 
-#### Task 2: Strict LF Protocol Framer
-**Description:** Implement `src/pi/framing.ts` with a custom stream framing class and serializer that strictly delimits records by `\n`, safely handles chunked data across network/pipe buffers, strips optional `\r`, and does not split on Unicode line separators `U+2028` / `U+2029`.
+#### Task 2: GFM Markdown Table Parser & Converter
+**Description:** Implement `src/telegram/rich-table.ts` to parse standard GitHub Flavored Markdown tables (e.g. `| col1 | col2 |`) into Telegram's native `InputRichBlockTable`. Detect header rows (`is_header: true`), cell content alignments (`align: "left" | "center" | "right"`), and apply configurable table styling flags (`is_bordered`, `is_striped`, `is_compact`).
 
 **Acceptance criteria:**
-- [x] `JsonLineFramer` accumulates arbitrary chunks from a `ReadableStream` or `EventEmitter` and emits complete JSONL strings on `\n`.
-- [x] Correctly parses lines containing `\r\n` by stripping `\r`.
-- [x] Correctly preserves `\u2028` and `\u2029` within JSON payloads without breaking line boundaries.
-- [x] Serializer terminates all outgoing commands strictly with `\n`.
-- [x] Comprehensive unit tests cover split chunks, multi-line chunks, empty lines, and Unicode line separators.
+- [x] `isMarkdownTable(text: string): boolean` accurately detects valid GFM table blocks.
+- [x] `parseMarkdownTable(tableMarkdown: string, options?: TableOptions): InputRichBlockTable` parses headers, delimiter alignment row, and data rows into `RichBlockTableCell[][]`.
+- [x] Col alignments `:---`, `:---:`, and `---:` are mapped to `"left"`, `"center"`, and `"right"`. Default alignment is `"left"`.
+- [x] Header row cells are marked with `is_header: true`.
+- [x] Table options `is_bordered`, `is_striped`, and `is_compact` default to `true`.
+- [x] Handles messy markdown tables: irregular spacing, missing outer pipes, escaped pipes `\|`, and empty cells.
+- [x] Unit tests in `tests/rich-table.test.ts` verify all table variants, alignment combinations, and edge cases.
 
 **Verification:**
-- [x] Tests pass: `pnpm test -- tests/framing.test.ts`
-- [x] Build succeeds: `pnpm typecheck`
+- [x] Tests pass: `pnpm vitest run tests/rich-table.test.ts`
+- [x] Type check succeeds: `pnpm typecheck`
 
 **Dependencies:** Task 1
 **Files likely touched:**
-- `src/pi/framing.ts`
-- `tests/framing.test.ts`
+- `src/telegram/rich-table.ts`
+- `tests/rich-table.test.ts`
 **Estimated scope:** Small (2 files)
 
 ---
 
 ### Checkpoint: Foundation
-- [x] Configuration validates environment variables accurately.
-- [x] Protocol framing unit tests pass 100% with full coverage of edge cases.
+- [x] Inline RichText parser passes all unit tests with full formatting support.
+- [x] GFM table parser converts complex tables to `InputRichBlockTable` cleanly.
 - [x] `pnpm typecheck` passes with zero errors.
 
 ---
 
-### Phase 2: Pi Subprocess Client & RPC Lifecycle
+### Phase 2: Comprehensive Block Parser
 
-#### Task 3: Pi RPC Protocol Types & Definitions
-**Description:** Define complete TypeScript types and interfaces in `src/pi/types.ts` reflecting the Pi RPC protocol, including incoming stdin commands (`prompt`, `abort`, `get_state`), image payloads, steering options, and outgoing stdout events (`agent_start`, `turn_start`, `message_update`, `toolcall_start`, `toolcall_end`, `turn_end`, `agent_end`, `agent_settled`, `response`, `error`).
-
-**Acceptance criteria:**
-- [ ] Type-safe discriminated unions for all Stdin commands and Stdout events.
-- [ ] Assistant delta event types (`text_delta`, thinking events if present).
-- [ ] Tool call metadata types (`toolName`, `id`, `args`, results).
-- [ ] Client event emitter interface for consuming modules.
-
-**Verification:**
-- [ ] Build succeeds: `pnpm typecheck`
-
-**Dependencies:** Task 1
-**Files likely touched:**
-- `src/pi/types.ts`
-**Estimated scope:** Small (1 file)
-
----
-
-#### Task 4: Pi Subprocess Client
-**Description:** Implement `PiClient` in `src/pi/client.ts` to spawn `pi --mode rpc`, wire stdin/stdout through `JsonLineFramer`, track operational status (`isIdle`, `isStreaming`, `currentTool`), manage command request/response promises by ID, provide methods for `prompt`, `steer`, `abort`, `getState`, and emit typed lifecycle events.
+#### Task 3: Full Markdown to InputRichMessage Block Parser
+**Description:** Implement `src/telegram/rich-parser.ts` to convert complete Markdown documents into native `InputRichMessage` (`{ blocks: InputRichBlock[] }`). Support paragraphs, headings (`#`..`######`), preformatted code blocks (```` ```lang ````), lists (ordered, unordered, and task lists with checkboxes), blockquotes (`>`), expandable blockquotes / details (`<details>`, `<blockquote expandable>`), and AI thinking indicators (`<thinking>` or `<tg-thinking>`).
 
 **Acceptance criteria:**
-- [ ] Spawns `pi` with arguments `--mode rpc --session-dir <dir>` and optional `--model <model>` inside `cwd: PI_WORKSPACE_DIR`.
-- [ ] Maintains execution state: transitions to streaming on `agent_start` / `turn_start`, tracks active tool on `toolcall_start`/`end`, and returns to idle on `agent_settled`.
-- [ ] Automatically uses `streamingBehavior: "steer"` when prompting during an active stream.
-- [ ] `abort()` sends abort command and handles graceful halting.
-- [ ] Emits high-level events: `token` (`text_delta`), `tool_start`, `tool_end`, `settled`, `error`.
-- [ ] Clean shutdown: sends abort or kills child process on close.
+- [ ] `parseMarkdownToRichMessage(markdown: string): InputRichMessage` returns valid `{ blocks: InputRichBlock[] }`.
+- [ ] Headings (`# Heading`) are parsed into `InputRichBlockSectionHeading` with corresponding `size` (1 to 6).
+- [ ] Code blocks (```` ```python ... ``` ````) are parsed into `InputRichBlockPreformatted` with `language` and preformatted content.
+- [ ] Tables are parsed into `InputRichBlockTable` via `rich-table.ts`.
+- [ ] Unordered and ordered lists are parsed into `InputRichBlockList` with `InputRichBlockListItem[]`. Task lists (`- [ ]`, `- [x]`) include `has_checkbox` and `is_checked`.
+- [ ] Standard blockquotes (`> text`) produce `InputRichBlockBlockQuotation`.
+- [ ] Expandable details (`<details><summary>Title</summary>Content</details>`) produce `InputRichBlockDetails` with `summary` and inner `blocks`.
+- [ ] Thinking tags (`<thinking>...</thinking>`) produce `InputRichBlockThinking`.
+- [ ] Normal text blocks produce `InputRichBlockParagraph`.
+- [ ] Consecutive/mixed markdown structures are cleanly split into discrete blocks without dropping content.
+- [ ] Unit tests in `tests/rich-parser.test.ts` cover all block types, mixed documents, and partial/streaming content.
 
 **Verification:**
-- [ ] Tests pass: `pnpm test -- tests/pi-client.test.ts`
-- [ ] Build succeeds: `pnpm typecheck`
+- [ ] Tests pass: `pnpm vitest run tests/rich-parser.test.ts`
+- [ ] Type check succeeds: `pnpm typecheck`
 
-**Dependencies:** Tasks 2, 3
+**Dependencies:** Task 1, Task 2
 **Files likely touched:**
-- `src/pi/client.ts`
-- `tests/pi-client.test.ts`
+- `src/telegram/rich-parser.ts`
+- `tests/rich-parser.test.ts`
 **Estimated scope:** Medium (2 files)
 
 ---
 
-### Checkpoint: Pi RPC Client
-- [ ] Mocked subprocess tests verify prompt, steering, abort, and event emission flows.
-- [ ] State transitions between idle and streaming operate reliably without deadlock.
+### Checkpoint: Block Parsing Complete
+- [ ] All required block types parse cleanly into native `InputRichBlock` structures.
+- [ ] GFM tables, headings, code blocks, lists, details, and thinking blocks verified with unit tests.
+- [ ] `pnpm typecheck` passes with zero errors.
 
 ---
 
-### Phase 3: Telegram Formatting & Stream Throttling
+### Phase 3: Bot Streaming, Drafts & Resilient Fallback
 
-#### Task 5: Dynamic Markdown Tag Balancer & Sanitizer
-**Description:** Implement `src/telegram/markdown.ts` to balance incomplete markdown formatting tags generated during live LLM streaming (code blocks ` ``` `, inline code `` ` ``, bold `**`, italic `*`, spoilers `||`, strikethrough `~`), convert to Telegram-compatible MarkdownV2 via `telegramify-markdown`, and provide unformatted plain-text fallback handling.
-
-**Acceptance criteria:**
-- [ ] Automatically closes open code blocks by balancing triple backticks.
-- [ ] Balances unescaped inline code backticks, asterisks, underscores, spoilers, and tildes.
-- [ ] Applies `telegramify-markdown` to format valid markdown into MarkdownV2 syntax.
-- [ ] Exports `formatStreamingChunk(text: string): { markdown: string; plain: string }` helper.
-- [ ] Unit tests verify balancing for cut-off code blocks, lists, bold text, and complex multi-token streams.
-
-**Verification:**
-- [ ] Tests pass: `pnpm test -- tests/markdown.test.ts`
-- [ ] Build succeeds: `pnpm typecheck`
-
-**Dependencies:** Task 1
-**Files likely touched:**
-- `src/telegram/markdown.ts`
-- `tests/markdown.test.ts`
-**Estimated scope:** Small (2 files)
-
----
-
-#### Task 6: Telegram Stream Throttler & Message Splitter
-**Description:** Implement `StreamThrottler` in `src/telegram/throttler.ts` to buffer incoming tokens, enforce a >=1000ms edit throttle, display transient tool badges (e.g. `⚡ Running tool: bash (git status)...`), trigger typing indicators every 4 seconds, and gracefully split messages exceeding 4000 characters into new messages.
+#### Task 4: StreamThrottler Rich Message & Draft Streaming Integration
+**Description:** Upgrade `src/telegram/throttler.ts` to support Telegram Bot API 10.1+ Rich Messages. When rich messages are enabled and available on `TelegramApiLike`, stream intermediate tokens using `sendRichMessageDraft`, inject `InputRichBlockThinking` when a tool is executing, finalize with `sendRichMessage`, and provide a robust fallback to classic `sendMessage` / `editMessageText` on any failure.
 
 **Acceptance criteria:**
-- [ ] Queues edits and dispatches `editMessageText` at most once every `STREAM_THROTTLE_MS` (default 1000ms).
-- [ ] Appends dynamic transient status badge while a tool is executing, removing it once complete.
-- [ ] Catches `can't parse entities` errors and retries edit with plain unformatted text.
-- [ ] Ignores `message is not modified` Telegram errors silently.
-- [ ] Automatically finalizes the current message and creates a continuation message when the character count approaches 4000 characters.
-- [ ] Maintains recurring `typing` action loop while stream is active.
-- [ ] `finalize()` immediately flushes any remaining buffer with full formatting and stops all background timers.
+- [x] `TelegramApiLike` interface extended with optional `sendRichMessage` and `sendRichMessageDraft`.
+- [x] `StreamThrottlerOptions` accepts `enableRichMessages?: boolean` (defaults to `true`).
+- [x] During streaming, throttler calls `sendRichMessageDraft` with generated `draft_id` and parsed `InputRichMessage`.
+- [x] If `currentToolStatus` is present, throttler appends an `InputRichBlockThinking` block (`⚙️ Running: ${toolName}...`).
+- [x] On `finalize()`, throttler persists the completed response via `sendRichMessage`.
+- [x] If `sendRichMessageDraft` or `sendRichMessage` fails (e.g. not supported in chat type, client error, network issue), throttler automatically and permanently falls back to classic `sendMessage` / `editMessageText` for that session.
+- [x] Unit tests in `tests/throttler.test.ts` verify rich message drafting, thinking block insertion, finalization, and fallback paths.
 
 **Verification:**
-- [ ] Tests pass: `pnpm test -- tests/throttler.test.ts`
-- [ ] Build succeeds: `pnpm typecheck`
+- [x] Tests pass: `pnpm vitest run tests/throttler.test.ts`
+- [x] Type check succeeds: `pnpm typecheck`
 
-**Dependencies:** Tasks 1, 5
+**Dependencies:** Task 3
 **Files likely touched:**
 - `src/telegram/throttler.ts`
 - `tests/throttler.test.ts`
@@ -197,132 +163,85 @@ Project Scaffold (package.json, tsconfig.json, config.ts)
 
 ---
 
-### Checkpoint: Streaming & Markdown
-- [ ] Markdown balancer handles all partial delimiter scenarios without throwing.
-- [ ] Throttler passes rate-limit, fallback, tool badge, and 4000-char splitting unit tests.
-
----
-
-### Phase 4: Multimodal Input & Bot Handlers
-
-#### Task 7: Telegram Photo & Media Downloader
-**Description:** Implement `src/telegram/media.ts` to retrieve photo file info from the Telegram Bot API (`bot.api.getFile`), download file content into memory, and convert to base64 `ImageContent` objects accepted by the Pi RPC prompt command.
+#### Task 5: Bot Configuration & Wiring
+**Description:** Wire Rich Messages support into `src/config.ts` (optional configuration toggle `ENABLE_RICH_MESSAGES`) and `src/bot.ts` (pass rich message capabilities to `StreamThrottler` and handle session lifecycles).
 
 **Acceptance criteria:**
-- [ ] Extracts highest-resolution photo from incoming Telegram `photo` message array.
-- [ ] Downloads file stream via Telegram Bot API file download URL.
-- [ ] Encodes buffer to Base64 with proper MIME type (`image/jpeg`, `image/png`).
-- [ ] Handles download failures or oversized files with helpful error messages.
+- [ ] `src/config.ts` includes `enableRichMessages: boolean` (defaulting to `true`, configurable via `ENABLE_RICH_MESSAGES`).
+- [ ] `src/bot.ts` configures `StreamThrottler` with `enableRichMessages` from config.
+- [ ] Unit tests in `tests/config.test.ts` and `tests/bot.test.ts` verify configuration parsing and bot session attachment with rich messages enabled/disabled.
 
 **Verification:**
-- [ ] Tests pass: `pnpm test -- tests/media.test.ts`
-- [ ] Build succeeds: `pnpm typecheck`
+- [ ] Tests pass: `pnpm vitest run tests/config.test.ts tests/bot.test.ts`
+- [ ] Type check succeeds: `pnpm typecheck`
 
-**Dependencies:** Tasks 1, 3
+**Dependencies:** Task 4
 **Files likely touched:**
-- `src/telegram/media.ts`
-- `tests/media.test.ts`
-**Estimated scope:** Small (2 files)
-
----
-
-#### Task 8: grammY Bot Setup, Security Whitelist & Command Handlers
-**Description:** Implement `src/bot.ts` with grammY bot setup, auto-retry plugin, user ID whitelist middleware, command handlers (`/start`, `/help`, `/stop`, `/status`, `/new`), text message handler, and photo handler with caption support.
-
-**Acceptance criteria:**
-- [ ] Whitelist middleware rejects or notifies any user whose ID is not in `ALLOWED_TELEGRAM_USER_IDS`.
-- [ ] Installed `@grammyjs/auto-retry` plugin to automatically handle transient Telegram network issues.
-- [ ] `/start` and `/help` provide command overviews and system usage instructions.
-- [ ] `/stop` immediately aborts the active Pi RPC agent run and notifies the user.
-- [ ] `/status` returns active agent state (idle vs busy), active model, and session path.
-- [ ] `/new` resets or rotates the session context.
-- [ ] Standard message handler checks Pi state: if idle, starts streaming throttler and initiates agent run; if running, dispatches in-flight steering prompt.
-- [ ] Photo handler downloads images via `media.ts`, attaches to prompt, and streams response.
-
-**Verification:**
-- [ ] Tests pass: `pnpm test -- tests/bot.test.ts`
-- [ ] Build succeeds: `pnpm typecheck`
-
-**Dependencies:** Tasks 4, 6, 7
-**Files likely touched:**
+- `src/config.ts`
 - `src/bot.ts`
+- `tests/config.test.ts`
 - `tests/bot.test.ts`
-**Estimated scope:** Medium (2 files)
+**Estimated scope:** Small (4 files)
 
 ---
 
-### Checkpoint: Bot & Media Integration
-- [ ] Whitelist guard successfully blocks unauthorized access.
-- [ ] In-flight steer vs idle prompt routing functions properly.
-- [ ] Photo conversion integrates with Pi prompt payload structure.
+### Checkpoint: Streaming & Bot Integrated
+- [ ] Throttler streams rich drafts and finalizes via `sendRichMessage`.
+- [ ] AI thinking indicator is injected during active tool execution.
+- [ ] Graceful fallback to classic text messages on error is fully verified.
+- [ ] All unit tests pass.
 
 ---
 
-### Phase 5: Entrypoint, Build & End-to-End Verification
+### Phase 4: Full System Verification & Context Maintenance
 
-#### Task 9: Application Entry Point & Process Lifecycle
-**Description:** Implement `src/index.ts` to initialize configuration, instantiate `PiClient` and `bot`, configure graceful shutdown listeners for `SIGINT` / `SIGTERM`, ensure workspace and session directories exist, start long polling (`bot.start()`), and log startup diagnostics.
+#### Task 6: End-to-End Integration Tests & Context Graph Maintenance
+**Description:** Update `tests/integration.test.ts` to test end-to-end flow with markdown tables, code blocks, and AI thinking streaming to Rich Messages. Re-generate AST symbols, dependency graphs, and update context documentation per repository AGENTS.md instructions.
 
 **Acceptance criteria:**
-- [ ] Validates workspace and session directories, creating them if missing.
-- [ ] Spawns Pi subprocess on startup and verifies handshake.
-- [ ] Captures `SIGINT` and `SIGTERM` signals, cleanly stopping the bot and shutting down the Pi subprocess.
-- [ ] Catches unhandled rejections and uncaught exceptions with structured logging.
+- [x] `tests/integration.test.ts` validates end-to-end token streaming with rich messages, table rendering, thinking blocks, and fallback.
+- [x] Full test suite passes: `pnpm test`.
+- [x] Type checking passes with no errors: `pnpm typecheck`.
+- [x] Build succeeds: `pnpm build`.
+- [x] Context documentation updated (`context/modules.md`, `context/signatures.md`, `context/dependencies.md`, `context/architecture.md`).
+- [x] AST and dependency verification scripts run cleanly.
 
 **Verification:**
-- [ ] Build succeeds: `pnpm build`
-- [ ] `pnpm typecheck` passes cleanly
-- [ ] Dry-run startup test succeeds
+- [x] `pnpm test`
+- [x] `pnpm typecheck`
+- [x] `pnpm build`
+- [x] `python3 /Users/mikhaillarchanka/.gemini/config/skills/codebase-context-generator/scripts/verify_context.py --root .`
 
-**Dependencies:** Tasks 1, 4, 8
+**Dependencies:** Tasks 1-5
 **Files likely touched:**
-- `src/index.ts`
-**Estimated scope:** Small (1 file)
-
----
-
-#### Task 10: Integration Testing, Build Verification & Documentation Validation
-**Description:** Run complete test suite, verify production build (`pnpm build`), test `pi` CLI RPC compatibility via automated or scripted subprocess checks, and ensure all README / documentation commands (`pnpm dev`, `pnpm build`, `pnpm start`, `pnpm test`, `pnpm typecheck`) work seamlessly.
-
-**Acceptance criteria:**
-- [ ] All unit and integration tests pass: `pnpm test`.
-- [ ] TypeScript compilation passes with zero errors: `pnpm typecheck`.
-- [ ] Production build (`dist/index.js`) is generated and executable: `pnpm build`.
-- [ ] Workspace directory exists and `.env.example` aligns with `src/config.ts`.
-
-**Verification:**
-- [ ] `pnpm test` passes
-- [ ] `pnpm typecheck` passes
-- [ ] `pnpm build` succeeds
-- [ ] `node dist/index.js --help` or startup check confirms packaging integrity
-
-**Dependencies:** Tasks 1-9
-**Files likely touched:**
-- `README.md`
 - `tests/integration.test.ts`
-**Estimated scope:** Small (2 files)
+- `context/modules.md`
+- `context/signatures.md`
+- `context/dependencies.md`
+- `context/architecture.md`
+**Estimated scope:** Medium (5 files)
 
 ---
 
-### Checkpoint: Complete
-- [ ] All tasks completed and verified.
-- [ ] 100% test pass rate across all modules.
-- [ ] Application builds and starts cleanly.
+## Checkpoint: Final Review & Acceptance
+- [x] All 6 tasks implemented and verified test-first.
+- [x] Native Telegram Rich Messages (Bot API 10.1+) fully functional with tables, blocks, and thinking indicators.
+- [x] Fallback mechanism guarantees backward compatibility.
+- [x] All test suites green, zero type errors.
 
 ---
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
-|---|---|---|
-| Telegram rate-limit 429 when editing rapidly | High | Strict 1000ms minimum interval throttle in `StreamThrottler` + `@grammyjs/auto-retry` plugin. |
-| Telegram entity parse error on partial Markdown | High | Dynamic tag balancing for open syntax tags + automated fallback to plain text if Telegram rejects MarkdownV2. |
-| JSON stream corruption from Unicode separators (`U+2028`/`U+2029`) | High | Custom LF framer splitting exclusively on `\n` without Node's `readline`. |
-| Concurrent user messages disrupting Pi execution | Medium | Detection of `isStreaming` state; prompts sent with `streamingBehavior: "steer"` during active turns. |
-| Telegram message length overflow (>4096 chars) | Medium | Automatic threshold monitoring at 4000 characters; current message finalized and continuation message spawned. |
-| Unauthorized tool execution on host machine | Critical | Whitelist middleware running prior to all handlers, dropping or rejecting updates from unlisted user IDs. |
+|------|--------|------------|
+| Telegram API server or client version lacks Bot API 10.1+ Rich Message support | High | Throttler detects 400 Bad Request or missing method error and automatically falls back to MarkdownV2/plain text `sendMessage` / `editMessageText`. |
+| Complex/malformed markdown tables cause parser crash | Med | Tolerant parser in `rich-table.ts` normalizes ragged rows, strips unescaped pipes, and defaults missing cells to empty text without throwing. |
+| Incomplete streaming chunks break AST or block parsing | Med | Incremental block parser handles open code fences, open `<details>`, and trailing partial blocks safely. |
+| `sendRichMessageDraft` rate limiting or private chat restriction | Low | Draft streaming runs inside the existing $\ge 1000\text{ms}$ throttler and gracefully degrades if chat is not private or draft is rejected. |
 
 ---
 
 ## Open Questions
-- None. Requirements, architecture, framing rules, and bot commands are fully specified in `context/` and `AGENTS.md`.
+
+- None. GrammY 1.46.0 and `@grammyjs/types` 5.0.0 installed in the project already define the full Bot API 10.1+ schema (`sendRichMessage`, `sendRichMessageDraft`, `InputRichMessage`, `InputRichBlockTable`, `InputRichBlockThinking`).

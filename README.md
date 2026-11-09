@@ -7,6 +7,9 @@ A high-performance Telegram bot that connects to the [`pi`](https://github.com/e
 ## Features
 
 - ⚡ **Bidirectional Live Streaming**: Streams text tokens directly to Telegram messages using smart 1-second throttling to avoid Telegram flood limits.
+- 📊 **Native Rich Messages & Tables (Bot API 10.1+)**: Automatically parses GitHub Flavored Markdown (GFM) tables into native Telegram table blocks (`InputRichBlockTable`) with column alignment and compact borders, alongside native section headings, preformatted code, expandable details, blockquotes, and lists.
+- 🧠 **Live Drafts & Thinking Indicators**: Streams live drafts via `sendRichMessageDraft` with native thinking blocks (`InputRichBlockThinking`) during active tool executions, smoothly settling into the final message.
+- 🛡️ **Resilient Two-Tier Fallback**: Seamlessly falls back to classic `sendMessage` / `editMessageText` with MarkdownV2 (and stripped plain text) if rich messages are not supported by the client or chat.
 - 🎨 **Rich Markdown Support**: Full Telegram Markdown formatting including syntax-highlighted code blocks, blockquotes, inline code, bold, italic, spoilers, and links with resilient intermediate tag balancing.
 - 🛠️ **Real-time Tool Badges**: Displays transient indicators while the agent runs tools (e.g. `⚡ Running tool: bash (git status)...`), cleanly finalizing into response text when finished.
 - 🎯 **In-Flight Steering & Aborts**:
@@ -62,6 +65,7 @@ pnpm install
    PI_MODEL="anthropic/claude-3-7-sonnet"
    PI_SESSION_DIR=".sessions"
    STREAM_THROTTLE_MS="1000"
+   ENABLE_RICH_MESSAGES="true"
    ```
 
 ### 4. Running the Bot

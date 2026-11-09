@@ -28,6 +28,7 @@ describe("Configuration Module (loadConfig)", () => {
     expect(config.streamThrottleMs).toBe(1000);
     expect(config.piBinPath).toBe("pi");
     expect(config.piModel).toBeUndefined();
+    expect(config.enableRichMessages).toBe(true);
   });
 
   it("loads custom optional configuration values", () => {
@@ -39,6 +40,7 @@ describe("Configuration Module (loadConfig)", () => {
       PI_MODEL: "anthropic/claude-3-7-sonnet",
       STREAM_THROTTLE_MS: "2000",
       PI_BIN_PATH: "/usr/local/bin/pi",
+      ENABLE_RICH_MESSAGES: "false",
     };
 
     const config = loadConfig(env);
@@ -48,6 +50,21 @@ describe("Configuration Module (loadConfig)", () => {
     expect(config.piModel).toBe("anthropic/claude-3-7-sonnet");
     expect(config.streamThrottleMs).toBe(2000);
     expect(config.piBinPath).toBe("/usr/local/bin/pi");
+    expect(config.enableRichMessages).toBe(false);
+  });
+
+  it("correctly parses ENABLE_RICH_MESSAGES environment variable", () => {
+    const baseEnv = {
+      TELEGRAM_BOT_TOKEN: "valid_token",
+      ALLOWED_TELEGRAM_USER_IDS: "12345",
+    };
+
+    expect(loadConfig({ ...baseEnv }).enableRichMessages).toBe(true);
+    expect(loadConfig({ ...baseEnv, ENABLE_RICH_MESSAGES: "true" }).enableRichMessages).toBe(true);
+    expect(loadConfig({ ...baseEnv, ENABLE_RICH_MESSAGES: "1" }).enableRichMessages).toBe(true);
+    expect(loadConfig({ ...baseEnv, ENABLE_RICH_MESSAGES: "false" }).enableRichMessages).toBe(false);
+    expect(loadConfig({ ...baseEnv, ENABLE_RICH_MESSAGES: "0" }).enableRichMessages).toBe(false);
+    expect(loadConfig({ ...baseEnv, ENABLE_RICH_MESSAGES: "FALSE" }).enableRichMessages).toBe(false);
   });
 
   it("handles whitespace in ALLOWED_TELEGRAM_USER_IDS correctly", () => {

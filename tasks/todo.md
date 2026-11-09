@@ -1,107 +1,73 @@
-# Implementation Checklist: Telegram Bot Pi Agent Streamer
+# Implementation Tasks: Telegram Rich Messages Native Support (Bot API 10.1+)
 
-## Phase 1: Project Setup & Core Protocol Framing
-- [x] **Task 1: Project Scaffolding & Configuration Module**
-  - [x] Configure `package.json` with dependencies (`grammy`, `@grammyjs/auto-retry`, `telegramify-markdown`, `dotenv`, `zod`, `vitest`, `tsx`, `typescript`) and scripts (`dev`, `build`, `start`, `typecheck`, `test`).
-  - [x] Configure `tsconfig.json` for Node.js ESM (`NodeNext`).
-  - [x] Configure `vitest.config.ts`.
-  - [x] Implement strongly typed configuration parser in `src/config.ts`.
-  - [x] Write unit tests for configuration parsing in `tests/config.test.ts`.
-  - [x] Verify: `pnpm typecheck` and `pnpm test tests/config.test.ts`.
-- [x] **Task 2: Strict LF Protocol Framer**
-  - [x] Implement `JsonLineFramer` in `src/pi/framing.ts` with strict `\n` line splitting and `\r` stripping.
-  - [x] Ensure Unicode line terminators `\u2028` and `\u2029` inside JSON strings are preserved.
-  - [x] Implement outbound JSON command serializer in `src/pi/framing.ts`.
-  - [x] Write comprehensive unit tests in `tests/framing.test.ts` covering chunked inputs, multi-lines, empty lines, and Unicode line separators.
-  - [x] Verify: `pnpm test tests/framing.test.ts`.
+## Phase 1: Rich Text & Markdown Table Foundations
 
-## Checkpoint: Foundation
-- [x] All tests in Phase 1 pass cleanly.
-- [x] `pnpm typecheck` passes with zero errors.
+- [x] **Task 1: Rich Message Types & Inline RichText Parser**
+  - [x] Define Bot API 10.1+ Rich Message interfaces in `src/telegram/rich-types.ts`
+  - [x] Implement inline Markdown parser in `src/telegram/rich-text.ts` (bold, italic, code, strikethrough, spoiler, underline, links, math expressions)
+  - [x] Write unit tests in `tests/rich-text.test.ts` covering all inline styles, nested combinations, and unclosed tags
+  - [x] Verify: `pnpm vitest run tests/rich-text.test.ts` and `pnpm typecheck`
 
----
+- [x] **Task 2: GFM Markdown Table Parser & Converter**
+  - [x] Implement `src/telegram/rich-table.ts` to parse GFM tables into native `InputRichBlockTable`
+  - [x] Map column delimiters (`:---`, `:---:`, `---:`) to `align: "left" | "center" | "right"`
+  - [x] Tag header cells with `is_header: true` and configure table styling (`is_bordered`, `is_striped`, `is_compact`)
+  - [x] Handle messy table formatting (missing outer pipes, ragged rows, empty cells)
+  - [x] Write unit tests in `tests/rich-table.test.ts` verifying table parsing edge cases
+  - [x] Verify: `pnpm vitest run tests/rich-table.test.ts` and `pnpm typecheck`
 
-## Phase 2: Pi Subprocess Client & RPC Lifecycle
-- [x] **Task 3: Pi RPC Protocol Types & Definitions**
-  - [x] Define stdin commands (`prompt`, `abort`, `get_state`) in `src/pi/types.ts`.
-  - [x] Define stdout events (`agent_start`, `turn_start`, `message_update`, `toolcall_start`, `toolcall_end`, `turn_end`, `agent_end`, `agent_settled`) in `src/pi/types.ts`.
-  - [x] Define image attachment structures and client event emitter contracts.
-  - [x] Verify: `pnpm typecheck` and `pnpm test tests/types.test.ts`.
-- [x] **Task 4: Pi Subprocess Client**
-  - [x] Implement `PiClient` in `src/pi/client.ts` to spawn `pi --mode rpc` in `PI_WORKSPACE_DIR`.
-  - [x] Wire stdin/stdout via `JsonLineFramer`.
-  - [x] Track state: `isIdle`, `isStreaming`, `currentTool`.
-  - [x] Implement prompt submission with automatic `streamingBehavior: "steer"` when busy.
-  - [x] Implement `abort()`, `getState()`, and request/response promise tracking.
-  - [x] Implement event emissions for tokens, tool execution, and settlement.
-  - [x] Implement process lifecycle management and graceful shutdown.
-  - [x] Write unit tests in `tests/pi-client.test.ts`.
-  - [x] Verify: `pnpm test tests/pi-client.test.ts`.
+- [x] **Checkpoint: Foundation**
+  - [x] Verify all tests pass and types check clean
 
-## Checkpoint: Pi RPC Client
-- [x] Subprocess lifecycle and RPC event dispatching verified with tests.
-- [x] State transitions between idle and streaming operate reliably.
+## Phase 2: Comprehensive Block Parser
 
----
+- [x] **Task 3: Full Markdown to InputRichMessage Block Parser**
+  - [x] Implement `src/telegram/rich-parser.ts` to convert Markdown to `InputRichMessage` (`blocks: InputRichBlock[]`)
+  - [x] Support headings (`#`..`######`) -> `InputRichBlockSectionHeading`
+  - [x] Support code blocks (```` ```lang ````) -> `InputRichBlockPreformatted`
+  - [x] Integrate GFM tables via `src/telegram/rich-table.ts` -> `InputRichBlockTable`
+  - [x] Support lists (ordered, unordered, checkboxes `[ ]`/`[x]`) -> `InputRichBlockList`
+  - [x] Support blockquotes (`>`) -> `InputRichBlockBlockQuotation`
+  - [x] Support expandable details (`<details><summary>...</summary>...</details>`) -> `InputRichBlockDetails`
+  - [x] Support AI thinking indicator (`<thinking>...</thinking>` / `<tg-thinking>`) -> `InputRichBlockThinking`
+  - [x] Support paragraphs -> `InputRichBlockParagraph`
+  - [x] Write unit tests in `tests/rich-parser.test.ts` covering mixed blocks and streaming edge cases
+  - [x] Verify: `pnpm vitest run tests/rich-parser.test.ts` and `pnpm typecheck`
 
-## Phase 3: Telegram Formatting & Stream Throttling
-- [x] **Task 5: Dynamic Markdown Tag Balancer & Sanitizer**
-  - [x] Implement tag balancer in `src/telegram/markdown.ts` for unclosed code blocks (```` ``` ````), inline code (`` ` ``), bold (`**`), italic (`*`), spoiler (`||`), and strikethrough (`~`).
-  - [x] Integrate `telegramify-markdown` for MarkdownV2 formatting.
-  - [x] Provide safe plain-text fallback formatting function.
-  - [x] Write unit tests in `tests/markdown.test.ts` covering cut-off blocks and unbalanced markdown.
-  - [x] Verify: `pnpm test tests/markdown.test.ts`.
-- [x] **Task 6: Telegram Stream Throttler & Message Splitter**
-  - [x] Implement `StreamThrottler` in `src/telegram/throttler.ts` with 1000ms flush timer.
-  - [x] Implement periodic `sendChatAction(chatId, "typing")` every 4000ms.
-  - [x] Render transient tool execution badges (e.g. `⚡ Running tool: ...`).
-  - [x] Catch `can't parse entities` and fallback to plain unformatted text.
-  - [x] Handle 4000-character message boundary by finalizing current message and opening continuation message.
-  - [x] Implement `finalize()` to cleanly flush remaining buffer and cancel all timers.
-  - [x] Write unit tests in `tests/throttler.test.ts`.
-  - [x] Verify: `pnpm test tests/throttler.test.ts`.
+- [x] **Checkpoint: Block Parsing Complete**
+  - [x] Verify full document parsing across all block types with zero type errors
 
-## Checkpoint: Streaming & Markdown
-- [x] Markdown tag balancer handles cut-off chunks safely.
-- [x] Throttler rate limiting, typing action, tool badges, and splitting verified with tests.
+## Phase 3: Bot Streaming, Drafts & Resilient Fallback
 
----
+- [x] **Task 4: StreamThrottler Rich Message & Draft Streaming Integration**
+  - [x] Extend `TelegramApiLike` in `src/telegram/throttler.ts` with optional `sendRichMessage` and `sendRichMessageDraft`
+  - [x] Add `enableRichMessages` option to `StreamThrottler` (default: `true`)
+  - [x] Implement intermediate draft streaming using `sendRichMessageDraft` and unique `draft_id`
+  - [x] Inject `InputRichBlockThinking` block when `currentToolStatus` is active
+  - [x] Finalize stream with `sendRichMessage`
+  - [x] Implement automatic two-tier fallback to classic `sendMessage` / `editMessageText` on failure
+  - [x] Write unit tests in `tests/throttler.test.ts` covering rich drafting, thinking blocks, and fallback
+  - [x] Verify: `pnpm vitest run tests/throttler.test.ts` and `pnpm typecheck`
 
-## Phase 4: Multimodal Input & Bot Handlers
-- [x] **Task 7: Telegram Photo & Media Downloader**
-  - [x] Implement `downloadPhotoAsBase64` in `src/telegram/media.ts`.
-  - [x] Pick highest resolution photo from Telegram photo array.
-  - [x] Fetch binary stream and convert to base64 `ImageContent`.
-  - [x] Write unit tests in `tests/media.test.ts`.
-  - [x] Verify: `pnpm test tests/media.test.ts`.
-- [x] **Task 8: grammY Bot Setup, Security Whitelist & Command Handlers**
-  - [x] Implement `src/bot.ts` with grammY bot and auto-retry plugin.
-  - [x] Implement whitelist middleware checking `ALLOWED_TELEGRAM_USER_IDS`.
-  - [x] Implement commands: `/start`, `/help`, `/stop`, `/status`, `/new`.
-  - [x] Implement text message router (idle prompt vs in-flight steer).
-  - [x] Implement photo message router with image attachment handling.
-  - [x] Write unit tests in `tests/bot.test.ts`.
-  - [x] Verify: `pnpm test tests/bot.test.ts`.
+- [x] **Task 5: Bot Configuration & Wiring**
+  - [x] Add `ENABLE_RICH_MESSAGES` toggle to `src/config.ts` (default: `true`)
+  - [x] Configure `src/bot.ts` to pass rich message capability to `StreamThrottler`
+  - [x] Write unit tests in `tests/config.test.ts` and `tests/bot.test.ts`
+  - [x] Verify: `pnpm vitest run tests/config.test.ts tests/bot.test.ts` and `pnpm typecheck`
 
-## Checkpoint: Bot & Media Integration
-- [x] Unauthorized users are blocked by whitelist.
-- [x] Commands and message routes tested and verified.
+- [x] **Checkpoint: Streaming & Bot Integrated**
+  - [x] Verify live token streaming with rich draft updates, tool thinking indicator, and fallback
 
----
+## Phase 4: Full System Verification & Context Maintenance
 
-## Phase 5: Entrypoint, Build & End-to-End Verification
-- [x] **Task 9: Application Entry Point & Process Lifecycle**
-  - [x] Implement `src/index.ts` connecting config, PiClient, and bot.
-  - [x] Ensure workspace and session directories exist on startup.
-  - [x] Add signal handlers for `SIGINT` and `SIGTERM` for graceful teardown.
-  - [x] Verify: `pnpm typecheck` and `pnpm build`.
-- [x] **Task 10: Integration Testing, Build Verification & Documentation Validation**
-  - [x] Run full test suite: `pnpm test`.
-  - [x] Run typecheck: `pnpm typecheck`.
-  - [x] Verify production build: `pnpm build` creates runnable `dist/index.js`.
-  - [x] Confirm all commands in `README.md` (`pnpm dev`, `pnpm build`, `pnpm start`, `pnpm test`, `pnpm typecheck`) work properly.
+- [x] **Task 6: End-to-End Integration Tests & Context Graph Maintenance**
+  - [x] Update `tests/integration.test.ts` to test end-to-end token streaming with rich messages, tables, and thinking blocks
+  - [x] Run full test suite: `pnpm test`
+  - [x] Run type check: `pnpm typecheck`
+  - [x] Run build: `pnpm build`
+  - [x] Rescan AST and update symbol graphs and context documentation (`context/modules.md`, `context/signatures.md`, `context/dependencies.md`, `context/architecture.md`)
+  - [x] Verify context integrity with `verify_context.py`
 
-## Checkpoint: Complete
-- [x] All tasks completed and checked off.
-- [x] 100% test pass rate across all test files.
-- [x] Ready for deployment and production use.
+- [x] **Checkpoint: Final Review & Acceptance**
+  - [x] All tasks completed and verified
+  - [x] Codebase clean and ready for production

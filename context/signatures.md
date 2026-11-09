@@ -13,19 +13,19 @@ Quick-reference catalog of function and method signatures, arguments, and return
 | :--- | :--- | :--- | :--- |
 | `createBot` | `createBot()` | L26 | 0 |
 | `attachThrottlerSession` | `attachThrottlerSession()` | L124 | 0 |
-| `handleUserPrompt` | `handleUserPrompt()` | L179 | 0 |
+| `handleUserPrompt` | `handleUserPrompt()` | L181 | 0 |
 
 ## [`src/config.ts`](../src/config.ts)
 
 ### Classes
-- **`class Config`** (L87)
+- **`class Config`** (L95)
 
 ### Functions & Methods
 | Symbol | Signature | Line | Callers |
 | :--- | :--- | :--- | :--- |
-| `loadConfig` | `loadConfig()` | L98 | 0 |
-| `getConfig` | `getConfig()` | L127 | 0 |
-| `resetConfig` | `resetConfig()` | L134 | 0 |
+| `loadConfig` | `loadConfig()` | L107 | 0 |
+| `getConfig` | `getConfig()` | L137 | 0 |
+| `resetConfig` | `resetConfig()` | L144 | 0 |
 
 ## [`src/index.ts`](../src/index.ts)
 
@@ -156,29 +156,90 @@ Quick-reference catalog of function and method signatures, arguments, and return
 | `sanitizeToken` | `sanitizeToken()` | L100 | 0 |
 | `downloadTelegramPhotoAsBase64` | `downloadTelegramPhotoAsBase64()` | L123 | 0 |
 
+## [`src/telegram/rich-parser.ts`](../src/telegram/rich-parser.ts)
+
+### Classes
+- **`class RichParserOptions`** (L27)
+
+### Functions & Methods
+| Symbol | Signature | Line | Callers |
+| :--- | :--- | :--- | :--- |
+| `isTableStarter` | `isTableStarter()` | L47 | 0 |
+| `isBlockStarter` | `isBlockStarter()` | L57 | 0 |
+| `tryConsumeFence` | `tryConsumeFence()` | L75 | 0 |
+| `tryConsumeThinking` | `tryConsumeThinking()` | L119 | 0 |
+| `tryConsumeDivider` | `tryConsumeDivider()` | L178 | 0 |
+| `tryConsumeHeading` | `tryConsumeHeading()` | L195 | 0 |
+| `tryConsumeTable` | `tryConsumeTable()` | L217 | 0 |
+| `tryConsumeBlockquote` | `tryConsumeBlockquote()` | L249 | 0 |
+| `parseListItem` | `parseListItem()` | L287 | 0 |
+| `tryConsumeList` | `tryConsumeList()` | L328 | 0 |
+| `tryConsumeDetails` | `tryConsumeDetails()` | L364 | 0 |
+| `consumeParagraph` | `consumeParagraph()` | L427 | 0 |
+| `parseBlocks` | `parseBlocks()` | L455 | 0 |
+| `parseMarkdownToRichMessage` | `parseMarkdownToRichMessage()` | L538 | 0 |
+
+## [`src/telegram/rich-table.ts`](../src/telegram/rich-table.ts)
+
+### Classes
+- **`class TableOptions`** (L16)
+
+### Functions & Methods
+| Symbol | Signature | Line | Callers |
+| :--- | :--- | :--- | :--- |
+| `splitRowIntoCells` | `splitRowIntoCells()` | L30 | 0 |
+| `parseDelimiterRow` | `parseDelimiterRow()` | L81 | 0 |
+| `buildCell` | `buildCell()` | L111 | 0 |
+| `buildRow` | `buildRow()` | L131 | 0 |
+| `applyTableOptions` | `applyTableOptions()` | L151 | 0 |
+| `isMarkdownTable` | `isMarkdownTable()` | L173 | 0 |
+| `parseMarkdownTable` | `parseMarkdownTable()` | L181 | 0 |
+
+## [`src/telegram/rich-text.ts`](../src/telegram/rich-text.ts)
+
+### Classes
+- **`class DelimMatch`** (L54)
+- **`class DelimDef`** (L93)
+
+### Functions & Methods
+| Symbol | Signature | Line | Callers |
+| :--- | :--- | :--- | :--- |
+| `maskEscapes` | `maskEscapes()` | L35 | 0 |
+| `unmaskEscapes` | `unmaskEscapes()` | L46 | 0 |
+| `matchDelim` | `matchDelim()` | L63 | 0 |
+| `tryMatchDelim` | `tryMatchDelim()` | L118 | 0 |
+| `parseCode` | `parseCode()` | L134 | 0 |
+| `parseMath` | `parseMath()` | L150 | 0 |
+| `parseHtmlUnderline` | `parseHtmlUnderline()` | L170 | 0 |
+| `parseLink` | `parseLink()` | L186 | 0 |
+| `pushStyledEntity` | `pushStyledEntity()` | L205 | 0 |
+| `parseNodes` | `parseNodes()` | L218 | 0 |
+| `flushText` | `flushText()` | L223 | 0 |
+| `parseInlineRichText` | `parseInlineRichText()` | L308 | 0 |
+
 ## [`src/telegram/throttler.ts`](../src/telegram/throttler.ts)
 
 ### Classes
-- **`class TelegramApiLike`** (L3)
-- **`class StreamThrottlerOptions`** (L21)
-- **`class StreamThrottler`** (L28)
-- **`class get`** (L74)
-- **`class feed`** (L78)
-- **`class setToolStatus`** (L86)
-- **`class async`** (L282)
+- **`class TelegramApiLike`** (L5)
+- **`class StreamThrottlerOptions`** (L34)
+- **`class StreamThrottler`** (L44)
+- **`class get`** (L106)
+- **`class feed`** (L110)
+- **`class setToolStatus`** (L118)
+- **`class async`** (L370)
 
 ## [`tests/bot.test.ts`](../tests/bot.test.ts)
 
 ### Classes
-- **`class MockApiCall`** (L52)
+- **`class MockApiCall`** (L53)
 
 ### Functions & Methods
 | Symbol | Signature | Line | Callers |
 | :--- | :--- | :--- | :--- |
 | `createTestConfig` | `createTestConfig()` | L7 | 0 |
-| `createMockPiClient` | `createMockPiClient()` | L22 | 0 |
-| `attachMockApi` | `attachMockApi()` | L57 | 0 |
-| `makeUpdate` | `makeUpdate()` | L104 | 0 |
+| `createMockPiClient` | `createMockPiClient()` | L23 | 0 |
+| `attachMockApi` | `attachMockApi()` | L58 | 0 |
+| `makeUpdate` | `makeUpdate()` | L118 | 0 |
 
 ## [`tests/index.test.ts`](../tests/index.test.ts)
 
@@ -186,22 +247,22 @@ Quick-reference catalog of function and method signatures, arguments, and return
 | Symbol | Signature | Line | Callers |
 | :--- | :--- | :--- | :--- |
 | `createTestConfig` | `createTestConfig()` | L9 | 0 |
-| `createMockPiClient` | `createMockPiClient()` | L23 | 0 |
-| `createMockBot` | `createMockBot()` | L39 | 0 |
+| `createMockPiClient` | `createMockPiClient()` | L24 | 0 |
+| `createMockBot` | `createMockBot()` | L40 | 0 |
 
 ## [`tests/integration.test.ts`](../tests/integration.test.ts)
 
 ### Classes
-- **`class MockChildProcess`** (L11)
-- **`class MockApiCall`** (L88)
+- **`class MockChildProcess`** (L16)
+- **`class MockApiCall`** (L94)
 
 ### Functions & Methods
 | Symbol | Signature | Line | Callers |
 | :--- | :--- | :--- | :--- |
-| `createMockChildProcess` | `createMockChildProcess()` | L24 | 0 |
-| `createTestConfig` | `createTestConfig()` | L74 | 0 |
-| `attachMockTelegramApi` | `attachMockTelegramApi()` | L93 | 0 |
-| `makeUpdate` | `makeUpdate()` | L145 | 0 |
+| `createMockChildProcess` | `createMockChildProcess()` | L29 | 0 |
+| `createTestConfig` | `createTestConfig()` | L79 | 0 |
+| `attachMockTelegramApi` | `attachMockTelegramApi()` | L99 | 0 |
+| `makeUpdate` | `makeUpdate()` | L167 | 0 |
 
 ## [`tests/pi-client.test.ts`](../tests/pi-client.test.ts)
 
@@ -213,9 +274,17 @@ Quick-reference catalog of function and method signatures, arguments, and return
 | :--- | :--- | :--- | :--- |
 | `createMockChildProcess` | `createMockChildProcess()` | L18 | 0 |
 
+## [`tests/rich-parser.test.ts`](../tests/rich-parser.test.ts)
+
+### Functions & Methods
+| Symbol | Signature | Line | Callers |
+| :--- | :--- | :--- | :--- |
+| `run` | `run()` | L520 | 0 |
+
 ## [`tests/throttler.test.ts`](../tests/throttler.test.ts)
 
 ### Functions & Methods
 | Symbol | Signature | Line | Callers |
 | :--- | :--- | :--- | :--- |
 | `createMockApi` | `createMockApi()` | L4 | 0 |
+| `createRichMockApi` | `createRichMockApi()` | L19 | 0 |

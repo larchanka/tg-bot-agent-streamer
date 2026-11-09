@@ -34,9 +34,18 @@ graph TD
     Bot --> Types["src/pi/types.ts"]
     
     Throttler --> Markdown["src/telegram/markdown.ts"]
+    Throttler --> RichParser["src/telegram/rich-parser.ts"]
+    Throttler --> RichTypes["src/telegram/rich-types.ts"]
     
     PiClient --> Framing["src/pi/framing.ts"]
     PiClient --> Types
+
+    RichTable["src/telegram/rich-table.ts"] --> RichText["src/telegram/rich-text.ts"]
+    RichTable --> RichTypes["src/telegram/rich-types.ts"]
+    RichText --> RichTypes
+    RichParser["src/telegram/rich-parser.ts"] --> RichTable
+    RichParser --> RichText
+    RichParser --> RichTypes
 ```
 
 ---

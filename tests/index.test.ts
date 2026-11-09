@@ -15,6 +15,7 @@ function createTestConfig(overrides: Partial<Config> = {}): Config {
     piSessionDir: path.join(os.tmpdir(), `test-sess-${Date.now()}-${Math.random().toString(36).slice(2)}`),
     streamThrottleMs: 1000,
     piBinPath: "pi",
+    enableRichMessages: true,
     isUserAllowed: (userId: number) => allowedSet.has(userId),
     ...overrides,
   };

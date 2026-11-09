@@ -131,9 +131,11 @@ export function createBot(
     const throttler = options.throttlerFactory
       ? options.throttlerFactory(bot.api as unknown as TelegramApiLike, chatId, {
           throttleMs: config.streamThrottleMs,
+          useRichMessages: config.enableRichMessages,
         })
       : new StreamThrottler(bot.api as unknown as TelegramApiLike, chatId, {
           throttleMs: config.streamThrottleMs,
+          useRichMessages: config.enableRichMessages,
         });
 
     const onToken = (delta: string) => {

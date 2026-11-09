@@ -7,6 +7,11 @@ import { PiClient } from "../src/pi/client.js";
 import { createBot, type BotInfo } from "../src/bot.js";
 import type { Config } from "../src/config.js";
 import type { PromptCommand, AbortCommand } from "../src/pi/types.js";
+import type {
+  InputRichBlockTable,
+  InputRichBlockThinking,
+  InputRichMessage,
+} from "../src/telegram/rich-types.js";
 
 interface MockChildProcess extends EventEmitter {
   stdin: PassThrough;
@@ -80,6 +85,7 @@ function createTestConfig(overrides: Partial<Config> = {}): Config {
     piSessionDir: "/workspace/.sessions",
     streamThrottleMs: 1000,
     piBinPath: "pi",
+    enableRichMessages: false,
     isUserAllowed: (userId: number) => allowedSet.has(userId),
     ...overrides,
   };
@@ -132,6 +138,22 @@ function attachMockTelegramApi(bot: ReturnType<typeof createBot>) {
           file_id: (payload as any).file_id,
           file_path: "photos/sample_image.jpg",
           file_size: 2048,
+        },
+      } as any;
+    }
+
+    if (method === "sendRichMessageDraft") {
+      return { ok: true, result: true } as any;
+    }
+
+    if (method === "sendRichMessage") {
+      return {
+        ok: true,
+        result: {
+          message_id: ++nextMessageId,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: (payload as any).chat_id, type: "private" },
+          rich_message: (payload as any).rich_message,
         },
       } as any;
     }
@@ -549,5 +571,124 @@ describe("End-to-End Integration Tests", () => {
     // Pi process must NOT have received any command
     expect(mockProc.capturedCommands).toHaveLength(0);
     expect(piClient.isIdle).toBe(true);
+  });
+
+  it("streams rich message drafts with thinking blocks and finalizes with native table rich message", async () => {
+    const richConfig = createTestConfig({
+      enableRichMessages: true,
+      streamThrottleMs: 1000,
+    });
+
+    const piClient = new PiClient({
+      workspaceDir: richConfig.piWorkspaceDir,
+      spawn: mockSpawn as unknown as typeof import("node:child_process").spawn,
+    });
+    await piClient.start();
+
+    const bot = createBot(richConfig, piClient, { botInfo: mockBotInfo });
+    const { calls } = attachMockTelegramApi(bot);
+
+    // 1. User sends prompt
+    await bot.handleUpdate(
+      makeUpdate({
+        update_id: 50,
+        message_id: 601,
+        chat_id: 12345,
+        user_id: 12345,
+        text: "Compare PostgreSQL and SQLite in a table",
+      })
+    );
+
+    expect(mockProc.capturedCommands.length).toBe(1);
+    const promptCmd = mockProc.capturedCommands[0] as PromptCommand;
+    expect(promptCmd.type).toBe("prompt");
+
+    // 2. Pi starts turn and triggers tool call
+    mockProc.emitStdout({ type: "agent_start" });
+    mockProc.emitStdout({ type: "turn_start", id: promptCmd.id });
+    mockProc.emitStdout({ type: "toolcall_start", toolName: "read_file" });
+
+    // 3. Pi streams tokens containing a GFM Markdown table
+    mockProc.emitStdout({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta:
+          "Here is the database comparison:\n\n" +
+          "| Feature | SQLite | PostgreSQL |\n" +
+          "| :--- | :---: | ---: |\n" +
+          "| Concurrency | Single-writer | Multi-writer |\n" +
+          "| Storage | Single file | Client-server |\n\n",
+      },
+    });
+
+    // 4. Advance timer to trigger intermediate draft flush
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Verify sendRichMessageDraft was dispatched with intermediate blocks and InputRichBlockThinking
+    const draftCalls = calls.filter((c) => c.method === "sendRichMessageDraft");
+    expect(draftCalls.length).toBeGreaterThanOrEqual(1);
+
+    const firstDraft = draftCalls[0];
+    expect(firstDraft.payload.chat_id).toBe(12345);
+    expect(typeof firstDraft.payload.draft_id).toBe("number");
+
+    const draftRichMsg = firstDraft.payload.rich_message as InputRichMessage;
+    expect(draftRichMsg).toBeDefined();
+    expect(draftRichMsg.blocks).toBeDefined();
+    const draftBlocks = draftRichMsg.blocks!;
+    expect(draftBlocks.length).toBeGreaterThan(0);
+
+    const thinkingBlock = draftBlocks.find(
+      (b): b is InputRichBlockThinking => b.type === "thinking"
+    );
+    expect(thinkingBlock).toBeDefined();
+    expect(thinkingBlock?.text).toContain("read_file");
+
+    // 5. Tool ends and agent settles
+    mockProc.emitStdout({ type: "toolcall_end" });
+    mockProc.emitStdout({ type: "turn_end" });
+    mockProc.emitStdout({ type: "agent_settled" });
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(50);
+
+    // 6. When agent_settled fires, verify sendRichMessage is dispatched containing InputRichBlockTable
+    const richFinalCalls = calls.filter((c) => c.method === "sendRichMessage");
+    expect(richFinalCalls.length).toBe(1);
+
+    const finalPayload = richFinalCalls[0].payload;
+    expect(finalPayload.chat_id).toBe(12345);
+
+    const finalRichMsg = finalPayload.rich_message as InputRichMessage;
+    expect(finalRichMsg).toBeDefined();
+    expect(finalRichMsg.blocks).toBeDefined();
+    const finalBlocks = finalRichMsg.blocks!;
+
+    const tableBlock = finalBlocks.find(
+      (b): b is InputRichBlockTable => b.type === "table"
+    );
+    expect(tableBlock).toBeDefined();
+    expect(tableBlock?.cells.length).toBe(3); // 1 header row + 2 data rows
+
+    // Verify table headers and cell alignments
+    const headerRow = tableBlock?.cells[0];
+    expect(headerRow?.[0].text).toBe("Feature");
+    expect(headerRow?.[0].is_header).toBe(true);
+    expect(headerRow?.[0].align).toBe("left");
+    expect(headerRow?.[1].text).toBe("SQLite");
+    expect(headerRow?.[1].align).toBe("center");
+    expect(headerRow?.[2].text).toBe("PostgreSQL");
+    expect(headerRow?.[2].align).toBe("right");
+
+    // Verify data rows
+    const dataRow1 = tableBlock?.cells[1];
+    expect(dataRow1?.[0].text).toBe("Concurrency");
+    expect(dataRow1?.[1].text).toBe("Single-writer");
+    expect(dataRow1?.[2].text).toBe("Multi-writer");
+
+    // Ensure thinking block is removed in finalized message
+    const finalThinking = finalBlocks.find((b) => b.type === "thinking");
+    expect(finalThinking).toBeUndefined();
   });
 });

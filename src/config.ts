@@ -82,6 +82,14 @@ const rawEnvSchema = z.object({
     .trim()
     .transform((val) => val || "pi")
     .default("pi"),
+  ENABLE_RICH_MESSAGES: z
+    .string()
+    .trim()
+    .default("true")
+    .transform((val) => {
+      const lower = (val || "").toLowerCase();
+      return lower !== "false" && lower !== "0";
+    }),
 });
 
 export interface Config {
@@ -92,6 +100,7 @@ export interface Config {
   piModel?: string;
   streamThrottleMs: number;
   piBinPath: string;
+  enableRichMessages: boolean;
   isUserAllowed(userId: number): boolean;
 }
 
@@ -116,6 +125,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     piModel: data.PI_MODEL,
     streamThrottleMs: data.STREAM_THROTTLE_MS,
     piBinPath: data.PI_BIN_PATH,
+    enableRichMessages: data.ENABLE_RICH_MESSAGES,
     isUserAllowed(userId: number): boolean {
       return allowedSet.has(userId);
     },

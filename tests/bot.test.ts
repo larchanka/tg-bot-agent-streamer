@@ -13,6 +13,7 @@ function createTestConfig(overrides: Partial<Config> = {}): Config {
     piSessionDir: ".sessions",
     streamThrottleMs: 1000,
     piBinPath: "pi",
+    enableRichMessages: false,
     isUserAllowed: (userId: number) => allowedSet.has(userId),
     ...overrides,
   };
@@ -84,6 +85,19 @@ function attachMockApi(bot: ReturnType<typeof createBot>) {
     }
     if (method === "sendChatAction") {
       return { ok: true, result: true } as any;
+    }
+    if (method === "sendRichMessageDraft") {
+      return { ok: true, result: true } as any;
+    }
+    if (method === "sendRichMessage") {
+      return {
+        ok: true,
+        result: {
+          message_id: ++nextMessageId,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: (payload as any).chat_id, type: "private" },
+        },
+      } as any;
     }
     if (method === "getFile") {
       return {
@@ -899,6 +913,115 @@ describe("grammY Bot Setup & Handlers", () => {
       const sendCalls = calls.filter((c) => c.method === "sendMessage");
       expect(sendCalls.length).toBe(1);
       expect(String(sendCalls[0].payload.text)).toMatch(/failed to start prompt.*RPC timeout/i);
+    });
+  });
+
+  describe("Rich Messages Wiring & Configuration", () => {
+    it("passes enableRichMessages: true to throttler options when configured", async () => {
+      const config = createTestConfig({
+        streamThrottleMs: 1500,
+        enableRichMessages: true,
+      });
+      const piClient = createMockPiClient();
+      let capturedOptions: any = null;
+
+      const mockThrottler = {
+        feed: vi.fn(),
+        setToolStatus: vi.fn(),
+        finalize: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const bot = createBot(config, piClient as any, {
+        botInfo: mockBotInfo,
+        throttlerFactory: (_api, _chatId, opts) => {
+          capturedOptions = opts;
+          return mockThrottler as any;
+        },
+      });
+      attachMockApi(bot);
+
+      await bot.handleUpdate(
+        makeUpdate({
+          update_id: 60,
+          message_id: 60,
+          user_id: 12345,
+          text: "Hello with rich messages",
+        })
+      );
+
+      expect(capturedOptions).toEqual({
+        throttleMs: 1500,
+        useRichMessages: true,
+      });
+    });
+
+    it("passes enableRichMessages: false to throttler options when disabled in config", async () => {
+      const config = createTestConfig({
+        streamThrottleMs: 1200,
+        enableRichMessages: false,
+      });
+      const piClient = createMockPiClient();
+      let capturedOptions: any = null;
+
+      const mockThrottler = {
+        feed: vi.fn(),
+        setToolStatus: vi.fn(),
+        finalize: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const bot = createBot(config, piClient as any, {
+        botInfo: mockBotInfo,
+        throttlerFactory: (_api, _chatId, opts) => {
+          capturedOptions = opts;
+          return mockThrottler as any;
+        },
+      });
+      attachMockApi(bot);
+
+      await bot.handleUpdate(
+        makeUpdate({
+          update_id: 61,
+          message_id: 61,
+          user_id: 12345,
+          text: "Hello without rich messages",
+        })
+      );
+
+      expect(capturedOptions).toEqual({
+        throttleMs: 1200,
+        useRichMessages: false,
+      });
+    });
+
+    it("streams rich message draft and finalizes with sendRichMessage when enableRichMessages is true", async () => {
+      const config = createTestConfig({
+        streamThrottleMs: 100,
+        enableRichMessages: true,
+      });
+      const piClient = createMockPiClient();
+      const bot = createBot(config, piClient as any, { botInfo: mockBotInfo });
+      const { calls } = attachMockApi(bot);
+
+      await bot.handleUpdate(
+        makeUpdate({
+          update_id: 62,
+          message_id: 62,
+          user_id: 12345,
+          text: "Write rich code",
+        })
+      );
+
+      piClient.emit("tool_start", { type: "toolcall_start", toolName: "read_file", id: "t2" });
+      piClient.emit("token", "# Hello Rich World\n\nSome text");
+      piClient.emit("settled", { type: "agent_settled" });
+
+      await new Promise((r) => setTimeout(r, 20));
+
+      const richFinalCalls = calls.filter((c) => c.method === "sendRichMessage");
+      expect(richFinalCalls.length).toBe(1);
+      expect((richFinalCalls[0].payload as any).rich_message).toBeDefined();
     });
   });
 });
